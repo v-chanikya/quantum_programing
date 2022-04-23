@@ -1,6 +1,11 @@
-#lang typed/racket/no-check
-(require racket/trace)
+#lang racket
+;#lang typed/racket/no-check
 
+;debug
+(require racket/trace)
+(require syntax/macro-testing)
+(require macro-debugger/stepper)
+(require racket/generic)
 
 ; Quantum Lambda Calculus
 #|
@@ -15,38 +20,105 @@ c :== Constants:
 |#
 
 
-; Constants
-(struct (ψ) Hc ([psi : ψ]) #:transparent)
-(struct cnotc () #:transparent)
-(struct 0>c ([amp : Int]) #:transparent)
-(struct 1>c ([amp : Int]) #:transparent)
+;; Constants
+; Primitives 
+(struct 0> ([amp : Int]) #:transparent)
+(struct 1> ([amp : Int]) #:transparent)
 
-(define-type (constant c)
-  (U (Hc c)
-     cnotc
-     0>c
-     1>c))
+(struct primitive ([prim : (U 0> 1>)]) #:transparent)
+(struct ψ ([psi : (Listof primitive)]) #:transparent)
+
+; Gates
+(define-generics eval
+  (abc eval a))
+(struct H ()
+  #:transparent
+  #:methods gen:eval
+  [(define abc
+     (λ (a)
+       #t))])
+(struct cnot ()  #:transparent)
+(struct S ()  #:transparent)
+(struct R3 ()  #:transparent)
+(struct universal-gates ([gate : (U H cnot S R3)]))
 
 (define constant?
   (λ (c)
-    (cond
-      [(Hc? c)]
-      [(cnotc? c)]
-      [(0>c? c)]
-      [(1>c? c)]
-      [else #f])))
+    ;(printf "constant check for ~a\n" c)
+    (or (H? c)
+        (cnot? c)
+        (S? c)
+        (R3? c)
+        (0>? c)
+        (1>? c))))
 
-; Nonlinear
-(struct !t () #:transparent)
+(define linear?
+  (λ (l)
+    (or (ψ? l))))
 
-(define-type (nonlinear)
-  (U !t))
+;; Validate QC
+; lambda calculus parser
+(define syntax-parse
+  (λ (e)
+    (match e
+      [`,c #:when (constant? c) c]
+      [`,x #:when (linear? x) x]
+      [`,!t #:when (symbol? !t) !t]
+      [`(λ (,x) ,body) #:when (symbol? x) `(λ (,x) ,(syntax-parse body))]
+      [`(λ! (,x) ,body) #:when (symbol? x) `(λ! (,x) ,(syntax-parse body))]
+      [`(,rator ,rand) `(,(syntax-parse rator) ,(syntax-parse rand))]
+      [else (error "Given expression not a valid lambda calculus expression")])))
 
-(define nonlinear?
-  (λ (t)
-    (cond
-      [(!t? t)]
-      [else #f])))
+
+;(trace syntax-parse)
+; test program
+(syntax-parse (0> 1))
+(syntax-parse (1> 1))
+(syntax-parse (H))
+(syntax-parse 'a)
+(syntax-parse '(λ! (x) x))
+(syntax-parse '((λ! (x) x) y))
+(syntax-parse '(λ (x) x))
+(syntax-parse '((λ (x) x) y))
+(syntax-parse '(((λ (x) (λ (y) x)) z) k))
+(syntax-parse `(λ! (x) ,(0> 1))) ;invalid
+(syntax-parse `((λ! (x) x) ,(0> 1))) ; invalid
+(syntax-parse `(λ (x) ,(0> 1)))
+(syntax-parse `((λ (x) x) ,(0> 1)))
+
+; symantic checker for QC
+(define symantic-check
+  (λ (e)
+    (match e
+      [`,c #:when (constant? c) c]
+      [`,x #:when (linear? x) x]
+      [`,!t #:when (symbol? !t) !t]
+      [`(λ (,x) ,body) #:when (symbol? x) `(λ (,x) ,(symantic-check body))]
+      [`(λ! (,x) ,body) #:when (symbol? x) `(λ! (,x) ,(symantic-check body))]
+      [`(,rator ,rand) `(,(symantic-check rator) ,(symantic-check rand))]
+      [else (error "Invalid symantics")])))
+
+; β reduction of QC
+(define reduce
+  (λ (e)
+    (match e
+      [`,c #:when (constant? c) c]
+      [`,x #:when (linear? x) x]
+      [`,!t #:when (symbol? !t) !t]
+      [`(λ (,x) ,body) #:when (symbol? x) `(λ (,x) ,(reduce body))]
+      [`(λ! (,x) ,body) #:when (symbol? x) `(λ! (,x) ,(reduce body))]
+      [`(,rator ,rand) `(,(reduce rator) ,(reduce rand))]
+      [else (error "")])))
+
+(define run-qc
+  (λ (qc)
+    (begin
+      (syntax-parse qc)
+      (symantic-check qc)
+      (reduce qc))))
+
+#|
+; Macros to build λc from math
 
 ; syntax for quantum
 (define-syntax H
@@ -69,37 +141,12 @@ c :== Constants:
       [`(0>c 1>c) (λ () (+ 0>c 1>c))]
       [`(1>c 0>c) (λ () (+ 0>c 1>c))])))
 
-(require syntax/macro-testing)
-(require macro-debugger/stepper)
 ;(H 0>)
 ;(H 1>)
 ;(H (0>))
 ;(H (0> + 1>))
 ;(H (0> - 1>))
 
-; lambda calculus parser
-(define parse
-  (λ (e)
-    (match e
-      [`,n #:when (number? n) n]
-      [`,c #:when (constant? c) c]
-      [`,t #:when (nonlinear? t) t]
-      [`,y #:when (symbol? y) y]
-      [`(λ (,x) ,body) #:when (symbol? x) `(λ (,x) ,(parse body))]
-      [`(λ! (,x) ,body) #:when (symbol? x) `(λ! (,x) ,(parse body))]
-      [`(,rator ,rand) `(,(parse rator) ,(parse rand))]
-      [else (error "Given expression not a valid lambda calculus expression")])))
-
-(trace parse)
-;(define prog (H (0> + 1>)))
-;(parse '(H (0> + 1>)))
-(parse `( 0>c))
-
-
-
-
-
-
-
+|#
 
 
