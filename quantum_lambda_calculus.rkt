@@ -6,6 +6,7 @@
 (require syntax/macro-testing)
 (require macro-debugger/stepper)
 (require racket/generic)
+(require racket/vector)
 
 ; Quantum Lambda Calculus
 #|
@@ -22,29 +23,70 @@ c :== Constants:
 
 ;; Constants
 ; Primitives 
-(struct 0> ([amp : Int]) #:transparent)
-(struct 1> ([amp : Int]) #:transparent)
+(struct 0> (amp) #:transparent) ; [amp : Int]
+(struct 1> (amp) #:transparent) ; [amp : Int]
 
-(struct primitive ([prim : (U 0> 1>)]) #:transparent)
-(struct ψ ([psi : (Listof primitive)]) #:transparent)
+(struct primitive (prim) #:transparent) ;[prim : (U 0> 1>)]
+(struct ψ (psi) #:transparent) ; [psi : (Listof (Vectorof primitive))]
 
 ; Gates
-(define-generics eval
-  (abc eval a))
+(define-generics eval-qc
+  (evalq eval-qc θ))
+
+; helper
+(define θ0
+  (λ (θ)
+    (vector->list (car (ψ-psi θ)))))
+
+(define ψcon
+  (λ (ls)
+    (ψ (list (list->vector ls)))))
+
+(define ψsp
+  (λ (ls)
+    (ψ (map vector ls))))
+
 (struct H ()
   #:transparent
-  #:methods gen:eval
-  [(define abc
-     (λ (a)
-       #t))])
-(struct cnot ()  #:transparent)
+  #:methods gen:eval-qc
+  [(define evalq
+     (λ (eval-qc θ)
+       (match (θ0 θ)
+         [`(,x) #:when (0>? x)
+              (ψsp (list (0> (* (0>-amp x) (sqrt 0.5))) (1> (* (0>-amp x) (sqrt 0.5)))))]
+         [`(,x) #:when (1>? x)
+              (ψsp (list (0> (* (1>-amp x) (sqrt 0.5))) (1> (* -1 (1>-amp x) (sqrt 0.5)))))])))])
+
+(struct cnot ()
+  #:transparent
+  #:methods gen:eval-qc
+  [(define evalq
+     (λ (eval-qc θ)
+       (match (θ0 θ)
+         [`(,x  ,y) #:when (0>? x) θ]
+         [`(,x  ,y) #:when (1>? x)
+                     (cond
+                       [(0>? y) (ψcon (list x (1> (0>-amp y))))]
+                       [(1>? y) (ψcon (list x (0> (1>-amp y))))])]
+         [else (error "no match")])))])
+
 (struct S ()  #:transparent)
 (struct R3 ()  #:transparent)
-(struct universal-gates ([gate : (U H cnot S R3)]))
+
+;; Create superposition
+(define +
+  (λ (θ1 θ2)
+    (normalize (ψ (append (ψ-psi θ1) (ψ-psi θ2))))))
+
+(define normalize
+  (λ (θ)
+    θ))
+
+
+(struct universal-gates (gate)) ; [gate : (U H cnot S R3)]
 
 (define constant?
   (λ (c)
-    ;(printf "constant check for ~a\n" c)
     (or (H? c)
         (cnot? c)
         (S? c)
@@ -81,7 +123,7 @@ c :== Constants:
 (syntax-parse '(λ (x) x))
 (syntax-parse '((λ (x) x) y))
 (syntax-parse '(((λ (x) (λ (y) x)) z) k))
-(syntax-parse `(λ! (x) ,(0> 1))) ;invalid
+(syntax-parse `(λ! (x) ,(0> 1))) ;invalid |0>
 (syntax-parse `((λ! (x) x) ,(0> 1))) ; invalid
 (syntax-parse `(λ (x) ,(0> 1)))
 (syntax-parse `((λ (x) x) ,(0> 1)))
@@ -117,36 +159,160 @@ c :== Constants:
       (symantic-check qc)
       (reduce qc))))
 
-#|
-; Macros to build λc from math
+;; Test cases
 
-; syntax for quantum
-(define-syntax H
-  (syntax-rules (0> 1> + -)
-    [(H ()) #f]
-    [(H (ψ0 + ψ1 ψ ...)) (+ (H ψ0) (H ψ1) (H (ψ ...)))]
-    [(H (ψ0 - ψ1 ψ ...)) (- (H ψ0) (H ψ1) (H (ψ ...)))]   
-    [(H (+ ψ0 ψ ...)) (+ (H ψ0) (H (ψ ...)))]
-    [(H (- ψ0 ψ ...)) (- (H ψ0) (H (ψ ...)))]
-    [(H (ψ0 ψ ...)) ((H ψ0) (H (ψ ...)))]
-    [(H 0>) (Hc (0>c 1))]
-    [(H 1>) (Hc (1>c 1))]))
+; How ψ is represented
+; each vector represents a nbit qbit
+; the list represents the superposition of states
+
+;; examples:
+; 1 q-bit
+; |0> 
+(define 0>c
+  (ψ (list (vector (0> 1)))))
+; |1>
+(define 1>c
+  (ψ (list (vector (1> 1)))))
+
+; superposition 1/√2(|0> + |1>)
+(define +>
+  (ψ (list (vector (0> (sqrt 0.5))) (vector (1> (sqrt 0.5))))))
+; superposition 1/√2(|0> - |1>)
+(define ->
+  (ψ (list (vector (0> (sqrt 0.5))) (vector (1> (* -1 (sqrt 0.5)))))))
 
 
-(define +
-  (λ (ψ1 ψ2 . args)
-    (match `(,ψ1 ,ψ2)
-      [`(,0>c ,0>c) (0>c 2)]
-      [`(1>c 1>c) 1>c]
-      [`(0>c 1>c) (λ () (+ 0>c 1>c))]
-      [`(1>c 0>c) (λ () (+ 0>c 1>c))])))
+; 2 q-bits
+; |00>
+(define 00>c
+  (ψ (list (vector (0> 1) (0> 1)))))
+; |10>
+(define 10>c
+  (ψ (list (vector (1> 1) (0> 1)))))
+; |01>
+(define 01>c
+  (ψ (list (vector (0> 1) (1> 1)))))
+; |11>
+(define 11>c
+  (ψ (list (vector (1> 1) (1> 1)))))
 
-;(H 0>)
-;(H 1>)
-;(H (0>))
-;(H (0> + 1>))
-;(H (0> - 1>))
 
-|#
+; superposition of 2 qbits bell states
+; Φ+  1/√2 (|00> + |11>)
+(define Φ+
+  (ψ (list (vector (0> (sqrt 0.5)) (0> (sqrt 0.5)))
+           (vector (1> (sqrt 0.5)) (1> (sqrt 0.5))))))
+; Φ-  1/√2 (|00> + |11>)
+(define Φ-
+  (ψ (list (vector (0> (sqrt 0.5)) (0> (sqrt 0.5)))
+           (vector (1> (* -1 (sqrt 0.5))) (1> (* -1 (sqrt 0.5)))))))
+; Φ+  1/√2 (|00> + |11>)
+(define Ψ+
+  (ψ (list (vector (0> (sqrt 0.5)) (1> (sqrt 0.5)))
+           (vector (1> (sqrt 0.5)) (0> (sqrt 0.5))))))
+; Φ+  1/√2 (|00> + |11>)
+(define Ψ-
+  (ψ (list (vector (0> (sqrt 0.5)) (0> (sqrt 0.5)))
+           (vector (1> (* -1 (sqrt 0.5))) (0> (* -1 (sqrt 0.5)))))))
+
+
+(print "abcd---")
+; Hadaramart gate
+(evalq (H) 0>c)
+(evalq (H) 1>c)
+
+; control-not gate
+10>c
+(evalq (cnot) 10>c)
+11>c
+(evalq (cnot) 11>c)
+
+; gate operation on superposition
+(define evalsp
+  (λ (G θ)
+    (cond
+     [(null? (ψ-psi θ)) (ψ (list))]
+     [else (ψ (append (ψ-psi (evalq G (ψ (list (car (ψ-psi θ))))))
+                      (ψ-psi (evalsp G (ψ (cdr (ψ-psi θ)))))))])))
++>
+(evalsp (H) +>)
+->
+(evalsp (H) ->)
+
+Φ+
+(evalsp (cnot) Φ+)
+Φ-
+(evalsp (cnot) Φ-)
+Ψ+
+(evalsp (cnot) Ψ+)
+Ψ-
+(evalsp (cnot) Ψ-)
+
+; operate on single q-bit in n-qbit state
+(define *@
+  (λ (n θ1 θ2)
+    (cond
+      [(null? (ψ-psi θ2)) (ψ (list))]
+      [else (let ([middle (car (ψ-psi θ2))])
+              (let-values ([(left right) (vector-split-at (car (ψ-psi θ1)) n)])
+                (ψ (append (list (vector-append left
+                                                (vector-append middle right)))
+                           (ψ-psi (*@ n θ1 (ψ (cdr (ψ-psi θ2)))))))))])))
+
+(*@ 1 00>c +>)
+
+(define ψ@
+  (λ (n θ)
+    (cond
+      [(null? (ψ-psi θ)) (values (ψ (list)) (ψ (list)))]
+      [else (let-values ([(θ1 θ2) (ψ@ n (ψ (cdr (ψ-psi θ))))])
+              (let-values ([(left remaining) (vector-split-at (car (ψ-psi θ)) n)])
+                (let-values ([(middle right) (vector-split-at remaining 1)])
+                  (values (ψ (append (list (vector-append left right)) (ψ-psi θ1)))
+                          (ψ (append (list middle) (ψ-psi θ2)))))))])))
+
+(ψ@ 1 (*@ 1 00>c +>))
+
+(define reduceψ
+  (λ (ls)
+    (cond
+      [(null? ls) (ψ (list))]
+      [else (ψ (append (ψ-psi (car ls))
+                       (ψ-psi (reduceψ (cdr ls)))))])))
+
+(define G@
+  (λ (G n θ)
+    (let-values ([(θ1 θ2) (ψ@ n θ)])
+      (let ([θ2^ (map (λ (θ)
+                       (evalq G θ))
+                     (map (λ (l)
+                            (ψ (list l))) (ψ-psi θ2)))])
+        (reduceψ (map (λ (θ1 θ2)
+                        (*@ n θ1 θ2))
+                      (map (λ (l)
+                             (ψ (list l))) (ψ-psi θ1))
+                      θ2^))))))
+
+(G@ (H) 1 (*@ 1 00>c +>))
+
+
+
+; Construction of bell pair
+; |00> ---H1---> ---cnot---> 1/√2(|00> + |11>)
+(printf "Bell pair creation\n")
+00>c
+(G@ (H) 0 00>c)
+(evalsp (cnot) (G@ (H) 0 00>c))
+
+
+; Deutsch Algorithm
+(printf "Deutsch algorithm\n")
+01>c
+(G@ (H) 0 01>c)
+(G@ (H) 1 (G@ (H) 0 01>c))
+
+(define DUf ;Assume f is idenity function 
+  (λ (θ)
+    #f))
 
 
